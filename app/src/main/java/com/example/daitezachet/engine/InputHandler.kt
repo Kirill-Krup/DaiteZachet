@@ -14,9 +14,11 @@ class InputHandler(
     private val screenH: Float,
     controlsTop: Float = screenH * 0.78f
 ) {
-    val btnLeft  = RectF(0f,             controlsTop, screenW * 0.30f, screenH)
-    val btnRight = RectF(screenW * 0.35f, controlsTop, screenW * 0.65f, screenH)
-    val btnJump  = RectF(screenW * 0.70f, controlsTop, screenW,          screenH)
+    private val padH = 14f
+    private val padV = 12f
+    val btnLeft  = RectF(padH,                       controlsTop + padV, screenW * 0.28f - padH,  screenH - padV)
+    val btnRight = RectF(screenW * 0.36f + padH,     controlsTop + padV, screenW * 0.64f - padH,  screenH - padV)
+    val btnJump  = RectF(screenW * 0.72f + padH,     controlsTop + padV, screenW         - padH,  screenH - padV)
 
     // Track which pointer IDs are currently down
     private val activePointers = mutableSetOf<Int>()
