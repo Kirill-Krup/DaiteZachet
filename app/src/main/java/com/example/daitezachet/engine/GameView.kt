@@ -213,7 +213,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
     private fun drawDoor(canvas: Canvas) {
         val d = engine.door.bounds
-        if (engine.door.isOpen) {
+        if (engine.door.isOpen && engine.door.visuallyOpen) {
             canvas.drawRect(d, doorOpenPaint)
         } else {
             canvas.drawRect(d, doorClosedPaint)

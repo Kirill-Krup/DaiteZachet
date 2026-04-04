@@ -165,8 +165,10 @@ hidden: Boolean     — если true — не рисуется и не реаг
 
 ### Door
 ```
-bounds: RectF       — правая стена, y = 30%..97% комнаты
-isOpen: Boolean     — если false — является твёрдым телом (блокирует движение)
+bounds: RectF        — правая стена, y = 30%..97% комнаты
+isOpen: Boolean      — если false — является твёрдым телом (блокирует движение)
+visuallyOpen: Boolean — если false — дверь рисуется как закрытая (tan + замок),
+                        даже когда isOpen = true (по умолчанию true)
 ```
 
 ### Key

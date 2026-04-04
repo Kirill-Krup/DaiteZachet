@@ -11,8 +11,10 @@ class Button(rect: RectF) {
 }
 
 class Door(rect: RectF) {
-    val bounds = RectF(rect)
-    var isOpen = false
+    val bounds       = RectF(rect)
+    var isOpen       = false
+    /** Если false — дверь рисуется как закрытая, даже когда isOpen = true. */
+    var visuallyOpen = true
 }
 
 /**
