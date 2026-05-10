@@ -17,31 +17,19 @@ class Level13 : Level() {
 
     companion object {
         private const val UP_Y = 0.5f
-
         private const val PLAT_L_X1 = 0.05f; private const val PLAT_L_X2 = 0.25f
         private const val PLAT_R_X1 = 0.75f; private const val PLAT_R_X2 = 0.95f
-
         private const val MID_X1 = 0.40f; private const val MID_X2 = 0.60f
         private const val MID_Y  = 0.75f
-
         private const val HOMING_SPEED = 340f
         private const val TURN_SPEED   = 2.2f
-
-        private const val RAIN_SPEED        = 600f
-        private const val RAIN_INTERVAL_MIN = 7.0f
-        private const val RAIN_INTERVAL_MAX = 13.0f
-        private const val RAIN_COUNT_MIN    = 2
-        private const val RAIN_COUNT_MAX    = 5
-
-        private const val INVERT_INTERVAL_MIN = 20f
-        private const val INVERT_INTERVAL_MAX = 35f
+        private const val RAIN_SPEED      = 600f
+        private const val RAIN_COUNT_MIN  = 2
+        private const val RAIN_COUNT_MAX  = 5
         private const val INVERT_DURATION_SEC = 5f
-
         private const val PENDULUM_AMPLITUDE_FRAC = 0.28f
         private const val PENDULUM_FREQUENCY      = 1.6f
-        private const val PENDULUM_DURATION       = 9f
-        private const val PENDULUM_INTERVAL_MIN   = 16f
-        private const val PENDULUM_INTERVAL_MAX   = 25f
+        private const val RAIN_WAVES_MAX = 3
     }
 
     private data class HomingProjectile(val spike: Spike, var angle: Float)
@@ -49,10 +37,11 @@ class Level13 : Level() {
 
     private data class FallingSpike(val spike: Spike)
     private val fallingSpikes = mutableListOf<FallingSpike>()
-    private var rainTimer = 7f
+
+    private var rainActive      = false
+    private var rainRepeatCount = 0
 
     private var doorPhase        = 0
-    private var doorShootActive  = false
     private var shootTimer       = 0f
     private var doorPatchPlatIdx = -1
 
@@ -61,17 +50,17 @@ class Level13 : Level() {
     private var trollTimer       = 0f
 
     private var isControlsInverted = false
-    private var invertCooldown     = 22f
+    private var invertTriggered    = false
     private var invertDuration     = 0f
 
-    private var midPlatIdx    = -1
-    private val midPlatOrig   = RectF()
-    private var leftPlatIdx   = -1
-    private val leftPlatOrig  = RectF()
+    private var midPlatIdx   = -1
+    private val midPlatOrig  = RectF()
+    private var leftPlatIdx  = -1
+    private val leftPlatOrig = RectF()
     private var rightPlatIdx  = -1
     private val rightPlatOrig = RectF()
-    private val leftSpikes      = mutableListOf<Spike>()
-    private val leftSpikesOrig  = mutableListOf<RectF>()
+    private val leftSpikes     = mutableListOf<Spike>()
+    private val leftSpikesOrig = mutableListOf<RectF>()
 
     private var warningAlpha = 0f
     private var warningText  = ""
@@ -85,14 +74,13 @@ class Level13 : Level() {
     )
     private val pendulums        = mutableListOf<PendulumSpike>()
     private var pendulumActive   = false
-    private var pendulumTimer    = 12f
-    private var pendulumDuration = 0f
-    private var pendulumMsgAlpha = 0f
+    private var pendulumTriggered = false
+    private var pendulumMsgAlpha  = 0f
 
-    private var platOscActive   = false
-    private var platOscTimer    = 18f
-    private var platOscDuration = 0f
-    private var platOscPhase    = 0f
+    private var platOscActive    = false
+    private var platOscTriggered = false
+    private var platOscDuration  = 0f
+    private var platOscPhase     = 0f
 
     private var slowAfterKeyActive = false
     private var slowAfterKeyTimer  = 0f
@@ -100,21 +88,18 @@ class Level13 : Level() {
 
     private var teleportTrollUsed = false
     private var teleportMsgAlpha  = 0f
+
     override fun setup(engine: GameEngine) {
         homingProjectiles.clear(); fallingSpikes.clear()
         leftSpikes.clear(); leftSpikesOrig.clear(); pendulums.clear()
 
-        doorPhase = 0; doorShootActive = false; shootTimer = 0f; doorPatchPlatIdx = -1
+        rainActive = false; rainRepeatCount = 0
+        doorPhase = 0; shootTimer = 0f; doorPatchPlatIdx = -1
         midJumpAttempted = false; trollActive = false; trollTimer = 0f
-        isControlsInverted = false; invertCooldown = 22f; invertDuration = 0f
-        rainTimer = 7f; warningAlpha = 0f; warningText = ""
-
-        pendulumActive = false; pendulumTimer = 12f
-        pendulumDuration = 0f; pendulumMsgAlpha = 0f
-
-        platOscActive = false; platOscTimer = 18f
-        platOscDuration = 0f; platOscPhase = 0f
-
+        isControlsInverted = false; invertTriggered = false; invertDuration = 0f
+        warningAlpha = 0f; warningText = ""
+        pendulumActive = false; pendulumTriggered = false; pendulumMsgAlpha = 0f
+        platOscActive = false; platOscTriggered = false; platOscDuration = 0f; platOscPhase = 0f
         slowAfterKeyActive = false; slowAfterKeyTimer = 0f; slowMsgAlpha = 0f
         teleportTrollUsed = false; teleportMsgAlpha = 0f
 
@@ -149,12 +134,12 @@ class Level13 : Level() {
     }
 
     private fun tick(engine: GameEngine, dt: Float) {
+        checkProximityTriggers(engine)
         handleInversion(engine, dt)
         handleMidPlatformTroll(engine, dt)
         handleDoorTroll(engine, dt)
         updateHomingProjectiles(engine, dt)
         updateFallingSpikes(engine, dt)
-        handleSpikeRain(engine, dt)
         handlePendulums(engine, dt)
         handlePlatOscillation(engine, dt)
         handleSlowAfterKey(engine, dt)
@@ -166,33 +151,49 @@ class Level13 : Level() {
         if (pendulumMsgAlpha > 0f) pendulumMsgAlpha = (pendulumMsgAlpha - dt * 25f).coerceAtLeast(0f)
     }
 
-    private fun handleInversion(engine: GameEngine, dt: Float) {
-        if (isControlsInverted) {
-            invertDuration -= dt
-            if (engine.moveLeft && !engine.moveRight)
-                engine.player.x += 2f * Player.MOVE_SPEED * dt
-            else if (engine.moveRight && !engine.moveLeft)
-                engine.player.x -= 2f * Player.MOVE_SPEED * dt
-            if (invertDuration <= 0f) {
-                isControlsInverted = false
-                invertCooldown = INVERT_INTERVAL_MIN +
-                        (Math.random() * (INVERT_INTERVAL_MAX - INVERT_INTERVAL_MIN)).toFloat()
+    private fun checkProximityTriggers(engine: GameEngine) {
+        val p = engine.player
+        val w = engine.room.w
+
+        val nearKeyZone = p.x + Player.WIDTH > w * 0.68f
+        if (nearKeyZone && !rainActive && rainRepeatCount < RAIN_WAVES_MAX) {
+            rainActive = true
+            rainRepeatCount++
+            spawnSpikeWave(engine)
+        }
+        if (!nearKeyZone && rainActive) rainActive = false
+
+        if (!platOscTriggered && leftPlatIdx in engine.platforms.indices) {
+            val lp = engine.platforms[leftPlatIdx]
+            val onLeft = p.x + Player.WIDTH > lp.left && p.x < lp.right &&
+                    abs((p.y + Player.HEIGHT) - lp.top) < 10f && p.vy >= 0f
+            if (onLeft) {
+                platOscTriggered = true; platOscActive = true
+                platOscDuration = 5f; platOscPhase = 0f
+                warningAlpha = 255f; warningText = "~ ПЛАТФОРМЫ НЕСТАБИЛЬНЫ ~"
             }
-        } else {
-            invertCooldown -= dt
-            if (invertCooldown <= 0f) {
-                isControlsInverted = true
+        }
+
+        if (doorPhase == 2 && !invertTriggered) {
+            val door = engine.door.bounds
+            val dist = sqrt((p.x - door.centerX()).pow(2) + (p.y - door.centerY()).pow(2))
+            if (dist < w * 0.20f) {
+                invertTriggered = true; isControlsInverted = true
                 invertDuration = INVERT_DURATION_SEC
             }
         }
     }
 
-    private fun handleSpikeRain(engine: GameEngine, dt: Float) {
-        rainTimer -= dt
-        if (rainTimer <= 0f) {
-            spawnSpikeWave(engine)
-            rainTimer = RAIN_INTERVAL_MIN +
-                    (Math.random() * (RAIN_INTERVAL_MAX - RAIN_INTERVAL_MIN)).toFloat()
+    private fun handleInversion(engine: GameEngine, dt: Float) {
+        if (!isControlsInverted) return
+        if (engine.moveLeft && !engine.moveRight)
+            engine.player.x += 2f * Player.MOVE_SPEED * dt
+        else if (engine.moveRight && !engine.moveLeft)
+            engine.player.x -= 2f * Player.MOVE_SPEED * dt
+        invertDuration -= dt
+        if (invertDuration <= 0f) {
+            isControlsInverted = false
+            invertTriggered = false
         }
     }
 
@@ -201,7 +202,7 @@ class Level13 : Level() {
         val spikeW = 28f; val spikeH = 24f
         warningAlpha = 255f; warningText = "⚠ БЕРЕГИСЬ СВЕРХУ ⚠"
         repeat(count) {
-            val x = spikeW + (Math.random() * (engine.room.w - spikeW * 2)).toFloat()
+            val x = engine.room.w * 0.60f + (Math.random() * (engine.room.w * 0.35f - spikeW)).toFloat()
             val spike = Spike(x, -spikeH - 10f, spikeW, spikeH, SpikeDir.DOWN)
             engine.spikes.add(spike); fallingSpikes.add(FallingSpike(spike))
         }
@@ -229,16 +230,15 @@ class Level13 : Level() {
             return
         }
         if (!midJumpAttempted) {
-            val p       = engine.player
-            val aboveX  = p.x + Player.WIDTH > midPlatOrig.left && p.x < midPlatOrig.right
+            val p      = engine.player
+            val aboveX = p.x + Player.WIDTH > midPlatOrig.left && p.x < midPlatOrig.right
             val falling = p.vy > 0 &&
                     (p.y + Player.HEIGHT) > (midPlatOrig.top - 80f) &&
                     (p.y + Player.HEIGHT) < midPlatOrig.top
             if (aboveX && falling) {
                 engine.platforms[midPlatIdx].set(-1000f, -1000f, -1000f, -1000f)
-                val shiftX = engine.room.w * 0.15f
-                leftSpikes.forEach { it.bounds.offset(shiftX, 0f) }
-                midJumpAttempted = true; trollActive = true; trollTimer = 5f
+                leftSpikes.forEach { it.bounds.offset(engine.room.w * 0.15f, 0f) }
+                midJumpAttempted = true; trollActive = true; trollTimer = 3f
             }
         }
     }
@@ -250,38 +250,27 @@ class Level13 : Level() {
 
         when (doorPhase) {
             0 -> {
-                val distX = abs(player.x - door.centerX())
-                if (engine.collectedKeys.isNotEmpty() && distX < w * 0.12f) {
+                if (engine.collectedKeys.isNotEmpty() && abs(player.x - door.centerX()) < w * 0.12f) {
                     engine.platforms.add(RectF(engine.room.doorRect))
                     doorPatchPlatIdx = engine.platforms.size - 1
-
-                    val origW = engine.room.doorRect.width()
-                    val origH = engine.room.doorRect.height()
-                    val newX  = engine.room.wallThick + 20f
-                    val newY  = engine.room.h * 0.05f
-                    door.set(newX, newY, newX + origW, newY + origH)
+                    val newX = engine.room.wallThick + 20f
+                    val newY = engine.room.h * 0.05f
+                    door.set(newX, newY, newX + engine.room.doorRect.width(), newY + engine.room.doorRect.height())
                     doorPhase = 1
                 }
             }
             1 -> {
-                val dist = sqrt(
-                    (player.x - door.centerX()).pow(2) +
-                            (player.y - door.centerY()).pow(2)
-                )
+                val dist = sqrt((player.x - door.centerX()).pow(2) + (player.y - door.centerY()).pow(2))
                 if (dist < w * 0.15f) {
                     door.set(engine.room.doorRect)
-                    // Убираем заглушку — дверь вернулась на место
-                    if (doorPatchPlatIdx in engine.platforms.indices) {
+                    if (doorPatchPlatIdx in engine.platforms.indices)
                         engine.platforms[doorPatchPlatIdx].set(-2000f, -2000f, -1990f, -1990f)
-                    }
-                    doorPhase = 2; doorShootActive = true; shootTimer = 0f
+                    doorPhase = 2; shootTimer = 0f
                 }
             }
             2 -> {
                 shootTimer -= dt
-                if (shootTimer <= 0f) {
-                    spawnHomingSpike(engine); shootTimer = 1.2f
-                }
+                if (shootTimer <= 0f) { spawnHomingSpike(engine); shootTimer = 1.2f }
             }
         }
     }
@@ -297,49 +286,36 @@ class Level13 : Level() {
         val iter = homingProjectiles.iterator()
         while (iter.hasNext()) {
             val p = iter.next(); val b = p.spike.bounds
-            val target = atan2(
-                engine.player.bounds.centerY() - b.centerY(),
-                engine.player.bounds.centerX() - b.centerX()
-            )
+            val target = atan2(engine.player.bounds.centerY() - b.centerY(), engine.player.bounds.centerX() - b.centerX())
             var diff = target - p.angle
             while (diff >  PI) diff -= (2 * PI).toFloat()
             while (diff < -PI) diff += (2 * PI).toFloat()
             p.angle += diff * TURN_SPEED * dt
             b.offset(cos(p.angle) * HOMING_SPEED * dt, sin(p.angle) * HOMING_SPEED * dt)
-            if (b.left < -100 || b.right > engine.room.w + 100 ||
-                b.top  < -100 || b.bottom > engine.room.h + 100) {
+            if (b.left < -100 || b.right > engine.room.w + 100 || b.top < -100 || b.bottom > engine.room.h + 100) {
                 engine.spikes.remove(p.spike); iter.remove()
             }
         }
     }
 
-
     private fun handlePendulums(engine: GameEngine, dt: Float) {
-        if (pendulumActive) {
-            pendulumDuration -= dt
-            pendulums.forEach { p ->
-                p.phase += p.frequency * dt
-                val newCx = p.centerX + sin(p.phase) * p.amplitude
-                val sw    = p.spike.bounds.width()
-                p.spike.bounds.offsetTo(newCx - sw / 2f, p.spike.bounds.top)
-            }
-            if (pendulumDuration <= 0f) {
-                pendulums.forEach { engine.spikes.remove(it.spike) }
-                pendulums.clear(); pendulumActive = false
-                pendulumTimer = PENDULUM_INTERVAL_MIN +
-                        (Math.random() * (PENDULUM_INTERVAL_MAX - PENDULUM_INTERVAL_MIN)).toFloat()
-            }
-        } else {
-            pendulumTimer -= dt
-            if (pendulumTimer <= 0f) spawnPendulums(engine)
+        if (!pendulumActive) return
+        if (engine.collectedKeys.isNotEmpty()) {
+            pendulums.forEach { engine.spikes.remove(it.spike) }
+            pendulums.clear(); pendulumActive = false; pendulumTriggered = false
+            return
+        }
+        pendulums.forEach { p ->
+            p.phase += p.frequency * dt
+            val newCx = p.centerX + sin(p.phase) * p.amplitude
+            p.spike.bounds.offsetTo(newCx - p.spike.bounds.width() / 2f, p.spike.bounds.top)
         }
     }
 
     private fun spawnPendulums(engine: GameEngine) {
-        val w      = engine.room.w; val h = engine.room.h
+        val w = engine.room.w; val h = engine.room.h
         val spikeW = 36f; val spikeH = 30f
-        val amp    = w * PENDULUM_AMPLITUDE_FRAC
-
+        val amp = w * PENDULUM_AMPLITUDE_FRAC
         listOf(
             Triple(w * 0.50f, h * 0.32f, 0f),
             Triple(w * 0.35f, h * 0.50f, PI.toFloat() * 2f / 3f),
@@ -349,35 +325,20 @@ class Level13 : Level() {
             engine.spikes.add(spike)
             pendulums.add(PendulumSpike(spike, cx, amp, PENDULUM_FREQUENCY, phase))
         }
-
-        pendulumActive = true; pendulumDuration = PENDULUM_DURATION; pendulumMsgAlpha = 255f
-        warningAlpha   = 255f; warningText = "⚠ ОСТОРОЖНО, МАЯТНИКИ ⚠"
+        pendulumActive = true; pendulumMsgAlpha = 255f
+        warningAlpha = 255f; warningText = "⚠ ОСТОРОЖНО, МАЯТНИКИ ⚠"
     }
 
     private fun handlePlatOscillation(engine: GameEngine, dt: Float) {
-        if (platOscActive) {
-            platOscDuration -= dt; platOscPhase += dt * 7f
-            val shiftY = sin(platOscPhase) * engine.room.h * 0.035f
-            if (leftPlatIdx  in engine.platforms.indices) {
-                engine.platforms[leftPlatIdx].set(leftPlatOrig)
-                engine.platforms[leftPlatIdx].offset(0f, shiftY)
-            }
-            if (rightPlatIdx in engine.platforms.indices) {
-                engine.platforms[rightPlatIdx].set(rightPlatOrig)
-                engine.platforms[rightPlatIdx].offset(0f, -shiftY)
-            }
-            if (platOscDuration <= 0f) {
-                if (leftPlatIdx  in engine.platforms.indices) engine.platforms[leftPlatIdx].set(leftPlatOrig)
-                if (rightPlatIdx in engine.platforms.indices) engine.platforms[rightPlatIdx].set(rightPlatOrig)
-                platOscActive = false
-                platOscTimer  = 15f + (Math.random() * 10f).toFloat()
-            }
-        } else {
-            platOscTimer -= dt
-            if (platOscTimer <= 0f) {
-                platOscActive = true; platOscDuration = 5f; platOscPhase = 0f
-                warningAlpha = 255f; warningText = "~ ПЛАТФОРМЫ НЕСТАБИЛЬНЫ ~"
-            }
+        if (!platOscActive) return
+        platOscDuration -= dt; platOscPhase += dt * 7f
+        val shiftY = sin(platOscPhase) * engine.room.h * 0.035f
+        if (leftPlatIdx  in engine.platforms.indices) { engine.platforms[leftPlatIdx].set(leftPlatOrig);  engine.platforms[leftPlatIdx].offset(0f, shiftY) }
+        if (rightPlatIdx in engine.platforms.indices) { engine.platforms[rightPlatIdx].set(rightPlatOrig); engine.platforms[rightPlatIdx].offset(0f, -shiftY) }
+        if (platOscDuration <= 0f) {
+            if (leftPlatIdx  in engine.platforms.indices) engine.platforms[leftPlatIdx].set(leftPlatOrig)
+            if (rightPlatIdx in engine.platforms.indices) engine.platforms[rightPlatIdx].set(rightPlatOrig)
+            platOscActive = false; platOscTriggered = false
         }
     }
 
@@ -400,10 +361,11 @@ class Level13 : Level() {
                 abs((p.y + Player.HEIGHT) - rp.top) < 8f && p.vy >= 0f
         if (onRight) {
             val lp = engine.platforms.getOrNull(leftPlatIdx) ?: return
-            engine.player.x  = lp.centerX() - Player.WIDTH / 2f
-            engine.player.y  = lp.top - Player.HEIGHT - 5f
+            engine.player.x = lp.centerX() - Player.WIDTH / 2f
+            engine.player.y = lp.top - Player.HEIGHT - 5f
             engine.player.vy = 0f
             teleportTrollUsed = true; teleportMsgAlpha = 255f
+            spawnPendulums(engine)
         }
     }
 
@@ -412,39 +374,32 @@ class Level13 : Level() {
 
         if (doorPhase == 1) {
             paint.color = Color.CYAN; paint.textSize = 30f; paint.textAlign = Paint.Align.CENTER
-            canvas.drawText("Я ТУТ!", engine.door.bounds.centerX(),
-                engine.door.bounds.top - 20f, paint)
+            canvas.drawText("Я ТУТ!", engine.door.bounds.centerX(), engine.door.bounds.top - 20f, paint)
         }
-
         if (isControlsInverted) {
             paint.color = Color.RED; paint.textSize = 40f; paint.textAlign = Paint.Align.CENTER
             canvas.drawText("ИНВЕРСИЯ", cx, engine.room.h * 0.2f, paint)
         }
-
         if (warningAlpha > 0f) {
             paint.color = Color.argb(warningAlpha.toInt().coerceIn(0, 255), 255, 80, 0)
             paint.textSize = 36f; paint.textAlign = Paint.Align.CENTER
             canvas.drawText(warningText, cx, engine.room.h * 0.12f, paint)
         }
-
         if (pendulumMsgAlpha > 0f) {
             paint.color = Color.argb(pendulumMsgAlpha.toInt().coerceIn(0, 255), 255, 140, 0)
             paint.textSize = 28f; paint.textAlign = Paint.Align.CENTER
             canvas.drawText("~ МАЯТНИКИ АКТИВНЫ ~", cx, engine.room.h * 0.18f, paint)
         }
-
         if (platOscActive) {
             paint.color = Color.argb(160, 255, 200, 0)
             paint.textSize = 28f; paint.textAlign = Paint.Align.CENTER
             canvas.drawText("~ ПЛАТФОРМЫ НЕСТАБИЛЬНЫ ~", cx, engine.room.h * 0.18f, paint)
         }
-
         if (slowMsgAlpha > 0f) {
             paint.color = Color.argb(slowMsgAlpha.toInt().coerceIn(0, 255), 0, 220, 120)
             paint.textSize = 32f; paint.textAlign = Paint.Align.CENTER
             canvas.drawText("ОСТАЛОСЬ ЧУТЬ-ЧУТЬ", cx, engine.room.h * 0.35f, paint)
         }
-
         if (teleportMsgAlpha > 0f) {
             paint.color = Color.argb(teleportMsgAlpha.toInt().coerceIn(0, 255), 200, 100, 255)
             paint.textSize = 34f; paint.textAlign = Paint.Align.CENTER

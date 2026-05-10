@@ -142,7 +142,6 @@ class GameEngine(val room: Room) {
             }
         }
 
-        // Автоусловие открытия двери
         if (!door.isOpen) doorCondition?.let { if (it(this)) door.isOpen = true }
 
         if (door.isOpen) {
@@ -151,8 +150,6 @@ class GameEngine(val room: Room) {
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Helpers — координаты в долях (0f..1f) от размеров комнаты
 
     /**
      * Переместить кнопку.

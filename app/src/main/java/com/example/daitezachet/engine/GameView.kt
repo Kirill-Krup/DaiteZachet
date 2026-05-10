@@ -5,21 +5,24 @@ import android.graphics.*
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import com.example.daitezachet.AppearanceStore
 import com.example.daitezachet.levels.Level
 import com.example.daitezachet.levels.LevelRegistry
+import com.example.daitezachet.records.RecordsStore
 
 class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback, Runnable {
-
-    // -------------------------------------------------------------------------
-    // State
 
     private var thread: Thread? = null
     @Volatile private var running = false
 
+    private lateinit var playerRenderer: PlayerRenderer
+    private var levelStartMs = 0L
+    private var currentLevelDeaths = 0
+    private var resultSavedForThisRun = false
     private var screenW = 0f
     private var screenH = 0f
-    private var gameH   = 0f       // game area height = screenH * 0.78
-
+    private var gameH   = 0f
+    private var finishedLevelTimeMs = -1L
     private lateinit var room:   Room
     private lateinit var engine: GameEngine
     private lateinit var input:  InputHandler
@@ -123,17 +126,23 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
     private fun setupLevel(number: Int) {
         levelNumber = number
-        level  = LevelRegistry.get(number)
-        room   = Room(screenW, gameH)
+        level = LevelRegistry.get(number)
+        room = Room(screenW, gameH)
         engine = GameEngine(room)
-        input  = InputHandler(screenW, screenH, gameH)
+        playerRenderer = PlayerRenderer(AppearanceStore.load(context))
+        input = InputHandler(screenW, screenH, gameH)
+
+        levelStartMs = android.os.SystemClock.elapsedRealtime()
+        currentLevelDeaths = 0
+        resultSavedForThisRun = false
+        finishedLevelTimeMs = -1L
         level.setup(engine)
-        showDeath = false; deathTimer = 0f
-        showWin   = false; winTimer   = 0f
+        showDeath = false
+        deathTimer = 0f
+        showWin = false
+        winTimer = 0f
     }
 
-    // -------------------------------------------------------------------------
-    // Thread control
 
     fun resume() {
         if (running) return
@@ -189,14 +198,30 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             }
             else -> {
                 engine.update(dt)
-                if (engine.player.isDead && !showDeath) { showDeath = true; deathTimer = 0f }
-                if (engine.levelComplete && !showWin)   { showWin   = true; winTimer   = 0f }
+
+                if (engine.player.isDead && !showDeath) {
+                    showDeath = true
+                    deathTimer = 0f
+                    currentLevelDeaths++
+                    RecordsStore.addDeath(context, levelNumber)
+                }
+
+                if (engine.levelComplete && !showWin) {
+                    showWin = true
+                    winTimer = 0f
+
+                    if (finishedLevelTimeMs < 0L) {
+                        finishedLevelTimeMs = android.os.SystemClock.elapsedRealtime() - levelStartMs
+                    }
+
+                    if (!resultSavedForThisRun) {
+                        RecordsStore.saveCompletion(context, levelNumber, finishedLevelTimeMs)
+                        resultSavedForThisRun = true
+                    }
+                }
             }
         }
     }
-
-    // -------------------------------------------------------------------------
-    // Rendering
 
     private fun drawFrame(canvas: Canvas) {
         canvas.drawColor(Color.rgb(18, 18, 28))
@@ -228,7 +253,6 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             canvas.drawRect(d, doorOpenPaint)
         } else {
             canvas.drawRect(d, doorClosedPaint)
-            // Draw lock icon (small key hole shape)
             val cx = d.centerX(); val cy = d.centerY()
             overlayPaint.color = Color.rgb(100, 60, 0); overlayPaint.style = Paint.Style.FILL
             canvas.drawCircle(cx, cy - 12f, 14f, overlayPaint)
@@ -301,21 +325,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     }
 
     private fun drawPlayer(canvas: Canvas) {
-        val p  = engine.player
-        val pb = p.bounds
-        playerPaint.color = if (p.hasKey) Color.rgb(255, 245, 150) else Color.WHITE
-        canvas.drawRect(pb, playerPaint)
-
-        // Eyes
-        playerPaint.color = Color.rgb(18, 18, 28)
-        val eyeY = pb.top + 16f
-        canvas.drawCircle(pb.left + 12f, eyeY, 5f, playerPaint)
-        canvas.drawCircle(pb.right - 12f, eyeY, 5f, playerPaint)
-
-        // Small key badge above head if carrying key
-        if (p.hasKey) {
-            val kBounds = RectF(pb.centerX() - 12f, pb.top - 26f, pb.centerX() + 12f, pb.top - 2f)
-            drawDiamond(canvas, kBounds, keyPaint)
+        playerRenderer.draw(canvas, engine.player, keyPaint) { c, bounds, paint ->
+            drawDiamond(c, bounds, paint)
         }
     }
 
@@ -330,6 +341,25 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
         hintPaint.alpha = 200
         canvas.drawText(level.hintText, screenW / 2f, 66f, hintPaint)
+
+
+        val currentTimeMs = if (finishedLevelTimeMs >= 0L) {
+            finishedLevelTimeMs
+        } else {
+            (android.os.SystemClock.elapsedRealtime() - levelStartMs).coerceAtLeast(0L)
+        }
+        val timeStr = formatTimeMs(currentTimeMs)
+        val deathsStr = currentLevelDeaths.toString()
+
+        hudPaint.textSize = 32f
+        hudPaint.textAlign = Paint.Align.RIGHT
+        hudPaint.color = Color.rgb(230, 230, 230)
+
+        val statsRight = btnExit.left - 24f
+        canvas.drawText("Время: $timeStr", statsRight, 42f, hudPaint)
+        canvas.drawText("Смерти: $deathsStr", statsRight, 72f, hudPaint)
+
+        hudPaint.color = Color.WHITE
     }
 
     private fun drawExitButton(canvas: Canvas) {
@@ -338,29 +368,25 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     }
 
     private fun drawControls(canvas: Canvas) {
-        // ── Подложка панели ──
         overlayPaint.color = Color.argb(220, 8, 8, 16)
         overlayPaint.style = Paint.Style.FILL
         canvas.drawRect(0f, gameH, screenW, screenH, overlayPaint)
 
-        // Тонкая светящаяся линия-разделитель
         overlayPaint.color = Color.argb(100, 100, 160, 255)
         canvas.drawRect(0f, gameH, screenW, gameH + 1.5f, overlayPaint)
         overlayPaint.color = Color.argb(40, 100, 160, 255)
         canvas.drawRect(0f, gameH + 1.5f, screenW, gameH + 5f, overlayPaint)
 
-        // ── Рисуем каждую кнопку ──
         drawCtrlButton(canvas, input.btnLeft,  "←", isMove = true)
         drawCtrlButton(canvas, input.btnRight, "→", isMove = true)
         drawCtrlButton(canvas, input.btnJump,  "↑", isMove = false)
     }
 
     private fun drawCtrlButton(canvas: Canvas, btn: android.graphics.RectF, label: String, isMove: Boolean) {
-        val r = 18f  // скругление углов
+        val r = 18f
         val cx = btn.centerX()
         val cy = btn.centerY()
 
-        // Градиентная заливка: тёмно-синяя снизу, чуть светлее сверху
         val gradient = android.graphics.LinearGradient(
             cx, btn.top, cx, btn.bottom,
             intArrayOf(
@@ -374,7 +400,6 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         canvas.drawRoundRect(btn, r, r, ctrlFillPaint)
         ctrlFillPaint.shader = null
 
-        // Внешнее свечение (синеватое)
         ctrlGlowPaint.color = if (isMove)
             Color.argb(60, 80, 140, 255)
         else
@@ -384,14 +409,12 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
             r + 2f, r + 2f, ctrlGlowPaint
         )
 
-        // Основная рамка
         ctrlStrokePaint.color = if (isMove)
             Color.argb(160, 100, 160, 255)
         else
             Color.argb(180, 160, 120, 255)
         canvas.drawRoundRect(btn, r, r, ctrlStrokePaint)
 
-        // Верхняя светлая полоска (эффект объёма)
         val shineRect = android.graphics.RectF(
             btn.left + 10f, btn.top + 6f,
             btn.right - 10f, btn.top + 14f
@@ -400,7 +423,6 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         overlayPaint.style = Paint.Style.FILL
         canvas.drawRoundRect(shineRect, 6f, 6f, overlayPaint)
 
-        // Символ стрелки
         ctrlTextPaint.color = if (isMove)
             Color.argb(230, 160, 210, 255)
         else
@@ -420,18 +442,76 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
     }
 
     private fun drawWinOverlay(canvas: Canvas) {
-        overlayPaint.color = Color.argb(170, 0, 150, 30)
+        val shader = android.graphics.LinearGradient(
+            0f, 0f, 0f, screenH,
+            intArrayOf(
+                Color.argb(210, 0, 140, 40),
+                Color.argb(190, 0, 80, 30),
+                Color.argb(210, 0, 140, 40)
+            ),
+            floatArrayOf(0f, 0.5f, 1f),
+            android.graphics.Shader.TileMode.CLAMP
+        )
+        overlayPaint.shader = shader
         overlayPaint.style = Paint.Style.FILL
         canvas.drawRect(0f, 0f, screenW, screenH, overlayPaint)
-        overlayPaint.color      = Color.WHITE
-        overlayPaint.textSize   = 64f
-        overlayPaint.textAlign  = Paint.Align.CENTER
+        overlayPaint.shader = null
+
+        val cardW = screenW * 0.74f
+        val cardH = screenH * 0.26f
+        val cx = screenW / 2f
+        val cy = screenH / 2f
+        val left = cx - cardW / 2f
+        val top = cy - cardH / 2f
+        val right = cx + cardW / 2f
+        val bottom = cy + cardH / 2f
+
+        overlayPaint.color = Color.argb(220, 10, 22, 28)
+        overlayPaint.style = Paint.Style.FILL
+        canvas.drawRoundRect(left, top, right, bottom, 24f, 24f, overlayPaint)
+
+        overlayPaint.style = Paint.Style.STROKE
+        overlayPaint.strokeWidth = 3f
+        overlayPaint.color = Color.argb(230, 0, 220, 180)
+        canvas.drawRoundRect(left + 2f, top + 2f, right - 2f, bottom - 2f, 22f, 22f, overlayPaint)
+
+        val shineRect = android.graphics.RectF(
+            left + 12f, top + 10f,
+            right - 12f, top + cardH * 0.35f
+        )
+        val shineShader = android.graphics.LinearGradient(
+            shineRect.left, shineRect.top, shineRect.left, shineRect.bottom,
+            intArrayOf(
+                Color.argb(70, 255, 255, 255),
+                Color.argb(0, 255, 255, 255)
+            ),
+            null,
+            android.graphics.Shader.TileMode.CLAMP
+        )
+        overlayPaint.shader = shineShader
+        overlayPaint.style = Paint.Style.FILL
+        canvas.drawRoundRect(shineRect, 18f, 18f, overlayPaint)
+        overlayPaint.shader = null
+
+        val t = (winTimer / WIN_DELAY).coerceIn(0f, 1f)
+        val scale = 1f + 0.06f * kotlin.math.sin(t * kotlin.math.PI).toFloat()
+
+        canvas.save()
+        canvas.scale(scale, scale, cx, cy)
+
+        overlayPaint.color = Color.WHITE
+        overlayPaint.textSize = 64f
+        overlayPaint.textAlign = android.graphics.Paint.Align.CENTER
         overlayPaint.isAntiAlias = true
-        canvas.drawText("Уровень пройден!", screenW / 2f, screenH / 2f, overlayPaint)
+        canvas.drawText("УРОВЕНЬ ПРОЙДЕН!", cx, cy - 6f, overlayPaint)
+
+        overlayPaint.textSize = 34f
+        overlayPaint.color = Color.argb(230, 190, 255, 210)
+        canvas.drawText("отличная работа", cx, cy + 40f, overlayPaint)
+
+        canvas.restore()
     }
 
-    // -------------------------------------------------------------------------
-    // Helpers
 
     private fun drawDiamond(canvas: Canvas, bounds: RectF, paint: Paint) {
         spikePathBuf.rewind()
@@ -443,13 +523,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
         canvas.drawPath(spikePathBuf, paint)
     }
 
-    // -------------------------------------------------------------------------
-    // Touch
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (!::input.isInitialized) return true
 
-        // Exit button — single tap anywhere on the button
         if (event.actionMasked == MotionEvent.ACTION_DOWN ||
             event.actionMasked == MotionEvent.ACTION_POINTER_DOWN) {
             val idx = event.actionIndex
@@ -461,5 +538,14 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback,
 
         if (showDeath || showWin) return true
         return input.onTouch(event, engine)
+    }
+
+    private fun formatTimeMs(ms: Long): String {
+        if (ms <= 0L || ms == Long.MAX_VALUE) return "—"
+        val totalSec = ms / 1000
+        val minutes = totalSec / 60
+        val seconds = totalSec % 60
+        val millis  = ms % 1000 / 10
+        return String.format("%d:%02d.%02d", minutes, seconds, millis)
     }
 }
